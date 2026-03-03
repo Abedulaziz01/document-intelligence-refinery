@@ -3,10 +3,11 @@ PageIndex Model
 A hierarchical navigation structure for documents
 Inspired by VectifyAI's PageIndex concept
 """
-from enum import Enum 
+
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from enum import Enum  # 👈 Add this import (you were missing it!)
 
 
 class DataType(str, Enum):
@@ -51,10 +52,11 @@ class SectionNode(BaseModel):
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        """Pydantic configuration"""
-        use_enum_values = True
-        arbitrary_types_allowed = True
+    # 👇 FIXED: Replaced class Config with model_config
+    model_config = ConfigDict(
+        use_enum_values=True,
+        arbitrary_types_allowed=True
+    )
     
     def has_children(self) -> bool:
         """Does this section have subsections?"""
@@ -93,13 +95,14 @@ class PageIndex(BaseModel):
     # Metadata
     created_at: datetime = Field(default_factory=datetime.now)
     
-    class Config:
-        """Pydantic configuration"""
-        arbitrary_types_allowed = True
+    # 👇 FIXED: Replaced class Config with model_config
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True
+    )
     
     def dict_for_json(self):
         """Convert to dict for JSON serialization"""
-        data = self.dict()
+        data = self.model_dump()  # 👈 Note: In V2, .dict() becomes .model_dump()
         data['created_at'] = self.created_at.isoformat()
         return data
     
