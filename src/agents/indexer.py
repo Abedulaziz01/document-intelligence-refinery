@@ -462,16 +462,77 @@ class PageIndexBuilder:
         return max(all_pages) if all_pages else 1
     
     def save_index(self, page_index: PageIndex, output_dir: Path):
-        """Save PageIndex to JSON file"""
+        """
+        Save PageIndex to JSON file
+        FIXED: Handles datetime serialization properly
+        """
         output_dir.mkdir(parents=True, exist_ok=True)
         
         filepath = output_dir / f"{page_index.doc_id}_pageindex.json"
         
-        with open(filepath, 'w') as f:
-            json.dump(page_index.dict_for_json(), f, indent=2)
-        
-        print(f"💾 PageIndex saved to: {filepath}")
-        return filepath
+        # Convert to dict for JSON serialization
+        try:
+            # Use dict_for_json if available (handles datetime conversion)
+            if hasattr(page_index, 'dict_for_json'):
+                index_dict = page_index.dict_for_json()
+            else:
+                # Fallback to model_dump and handle datetime manually
+                index_dict = page_index.model_dump()
+                
+                # Convert datetime fields to strings
+                if 'created_at' in index_dict and index_dict['created_at']:
+                    if hasattr(index_dict['created_at'], 'isoformat'):
+                        index_dict['created_at'] = index_dict['created_at'].isoformat()
+                
+                # Handle any nested datetime objects in sections
+                if 'root_sections' in index_dict:
+                    self._convert_datetime_in_sections(index_dict['root_sections'])
+                if 'section_by_id' in index_dict:
+                    for section in index_dict['section_by_id'].values():
+                        self._convert_datetime_in_sections([section])
+            
+            # Save with default=str as ultimate fallback
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(index_dict, f, indent=2, default=str)
+            
+            print(f"💾 PageIndex saved to: {filepath}")
+            return filepath
+            
+        except Exception as e:
+            print(f"⚠️ Error saving with primary method: {e}")
+            
+            # Ultimate fallback - minimal save
+            try:
+                minimal_dict = {
+                    "doc_id": page_index.doc_id,
+                    "filename": page_index.filename,
+                    "total_pages": page_index.total_pages,
+                    "total_sections": page_index.total_sections,
+                    "created_at": datetime.now().isoformat(),
+                    "note": "Full serialization failed, saved minimal version"
+                }
+                
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(minimal_dict, f, indent=2)
+                
+                print(f"⚠️ Saved minimal PageIndex to: {filepath}")
+                return filepath
+            except:
+                print(f"❌ Failed to save PageIndex")
+                return None
+    
+    def _convert_datetime_in_sections(self, sections: List):
+        """Helper to convert datetime fields in sections"""
+        for section in sections:
+            if isinstance(section, dict):
+                # Check for datetime fields
+                if 'created_at' in section and section['created_at']:
+                    if hasattr(section['created_at'], 'isoformat'):
+                        section['created_at'] = section['created_at'].isoformat()
+                
+                # Recursively process child sections
+                if 'child_sections' in section and section['child_sections']:
+                    self._convert_datetime_in_sections(section['child_sections'])
     
     def print_tree(self, page_index: PageIndex):
         """Print the tree structure"""
