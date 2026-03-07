@@ -225,3 +225,82 @@ class VectorStore:
             print("🧹 Cleared vector store")
         except Exception as e:
             print(f"❌ Error clearing vector store: {e}")
+def add_chunks(self, chunks: List, doc_id: str):
+    """
+    Add chunks to vector store with complete metadata
+    
+    Passes all required metadata:
+    - chunk_type
+    - page_refs  
+    - content_hash
+    - parent_section
+    - bbox coordinates
+    """
+    if not self.initialized:
+        print("❌ Vector store not initialized")
+        return
+    
+    if not chunks:
+        print("⚠️ No chunks to add")
+        return
+    
+    print(f"\n📥 Adding {len(chunks)} chunks to vector store...")
+    
+    # Prepare data for ChromaDB
+    ids = []
+    embeddings = []
+    metadatas = []
+    documents = []
+    
+    for i, chunk in enumerate(chunks):
+        # Create unique ID
+        chunk_id = f"{doc_id}_{chunk.ldu_id}_{i}"
+        ids.append(chunk_id)
+        
+        # Get embedding
+        embedding = self.embedding_model.encode(chunk.content).tolist()
+        embeddings.append(embedding)
+        
+        # Create complete metadata as required by rubric
+        metadata = {
+            'doc_id': doc_id,
+            'chunk_id': chunk.ldu_id,
+            'chunk_type': str(chunk.chunk_type.value) if hasattr(chunk.chunk_type, 'value') else str(chunk.chunk_type),
+            'page': str(chunk.page_refs[0]) if chunk.page_refs else '1',
+            'all_pages': ','.join(str(p) for p in chunk.page_refs) if chunk.page_refs else '1',
+            'token_count': str(chunk.token_count),
+            'content_hash': chunk.content_hash,
+            'parent_section': chunk.parent_section if hasattr(chunk, 'parent_section') and chunk.parent_section else 'none',
+            'section_hierarchy': '|'.join(chunk.section_hierarchy) if hasattr(chunk, 'section_hierarchy') and chunk.section_hierarchy else '',
+            
+            # Bounding box coordinates (if available)
+            'has_bbox': 'true' if chunk.bbox else 'false',
+            'bbox_page': str(chunk.bbox.page_number) if chunk.bbox else '',
+            'bbox_x0': str(chunk.bbox.x0) if chunk.bbox else '',
+            'bbox_y0': str(chunk.bbox.y0) if chunk.bbox else '',
+            'bbox_x1': str(chunk.bbox.x1) if chunk.bbox else '',
+            'bbox_y1': str(chunk.bbox.y1) if chunk.bbox else '',
+            
+            # Additional metadata for filtering
+            'has_tables': 'true' if chunk.tables else 'false',
+            'table_count': str(len(chunk.tables)) if chunk.tables else '0',
+            'strategy': getattr(chunk, 'strategy_used', 'unknown')
+        }
+        metadatas.append(metadata)
+        
+        # Add content
+        documents.append(chunk.content)
+    
+    # Add to ChromaDB in batches
+    batch_size = 100
+    for i in range(0, len(ids), batch_size):
+        end_idx = min(i + batch_size, len(ids))
+        self.collection.add(
+            ids=ids[i:end_idx],
+            embeddings=embeddings[i:end_idx],
+            metadatas=metadatas[i:end_idx],
+            documents=documents[i:end_idx]
+        )
+        print(f"  ✅ Added batch {i//batch_size + 1}/{(len(ids)-1)//batch_size + 1}")
+    
+    print(f"✅ Successfully added {len(chunks)} chunks to vector store with complete metadata")

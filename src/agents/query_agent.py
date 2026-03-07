@@ -496,3 +496,319 @@ class QueryAgent:
         """Clear conversation history"""
         self.conversation_history = []
         print("🧹 Conversation history cleared")
+def answer(self, question: str, doc_id: Optional[str] = None) -> Dict:
+    """
+    Answer a question using smart tool selection
+    
+    Intelligently routes queries to appropriate tools based on question type
+    """
+    print(f"\n🔍 Query Agent processing: '{question}'")
+    start_time = datetime.now()
+    
+    question_lower = question.lower()
+    
+    # =========================================================================
+    # TOOL SELECTION LOGIC - Route to appropriate tools
+    # =========================================================================
+    
+    selected_tools = []
+    
+    # Check for navigational queries (where to find X)
+    if any(word in question_lower for word in ['where', 'find', 'locate', 'section', 'page']):
+        selected_tools.append('pageindex_navigate')
+        print("  📍 Navigational query - using PageIndex")
+    
+    # Check for numerical/fact queries (revenue, profit, etc.)
+    if any(word in question_lower for word in ['revenue', 'profit', 'cost', 'amount', '$', 'million', 'billion', 'percent']):
+        selected_tools.append('structured_query')
+        print("  📊 Factual query - using structured_query")
+    
+    # Check for conceptual/semantic queries (what is, explain, describe)
+    if any(word in question_lower for word in ['what', 'explain', 'describe', 'how', 'why', 'tell me']):
+        selected_tools.append('semantic_search')
+        print("  🔍 Conceptual query - using semantic_search")
+    
+    # Default: use all tools if no clear pattern
+    if not selected_tools:
+        selected_tools = ['pageindex_navigate', 'semantic_search', 'structured_query']
+        print("  🔧 Using all tools")
+    
+    # =========================================================================
+    # EXECUTE SELECTED TOOLS
+    # =========================================================================
+    
+    results = {}
+    
+    if 'pageindex_navigate' in selected_tools:
+        print("\n  Step 1: Navigating PageIndex...")
+        results['sections'] = self.tools.pageindex_navigate(question, doc_id)
+    
+    if 'semantic_search' in selected_tools:
+        print("\n  Step 2: Semantic search...")
+        results['semantic'] = self.tools.semantic_search(question, doc_id, n_results=5)
+    
+    if 'structured_query' in selected_tools:
+        print("\n  Step 3: Querying fact table...")
+        results['facts'] = self.tools.structured_query(question, doc_id)
+    
+    # =========================================================================
+    # SYNTHESIZE ANSWER
+    # =========================================================================
+    
+    print("\n  Step 4: Synthesizing answer...")
+    answer, provenance = self._synthesize_answer_with_tool_selection(
+        question, 
+        results,
+        selected_tools
+    )
+    
+    # =========================================================================
+    # VERIFY
+    # =========================================================================
+    
+    print("\n  Step 5: Verifying claim...")
+    is_verified = self.tools.verify_claim(answer, provenance)
+    provenance.is_verified = is_verified
+    
+    processing_time = (datetime.now() - start_time).total_seconds() * 1000
+    
+    # Store in history
+    self.conversation_history.append({
+        'question': question,
+        'answer': answer,
+        'provenance': provenance,
+        'tools_used': selected_tools,
+        'timestamp': datetime.now().isoformat()
+    })
+    
+    # Print summary
+    print("\n" + "=" * 60)
+    print("📊 QUERY RESULTS")
+    print("=" * 60)
+    print(f"❓ Question: {question}")
+    print(f"🔧 Tools Used: {', '.join(selected_tools)}")
+    print(f"💡 Answer: {answer}")
+    print(f"✅ Verified: {'Yes' if is_verified else 'No'}")
+    print(f"⏱️  Time: {processing_time:.0f}ms")
+    print("\n📋 Provenance:")
+    print(provenance.to_markdown())
+    print("=" * 60)
+    
+    return {
+        'question': question,
+        'answer': answer,
+        'provenance': provenance.dict_for_json(),
+        'tools_used': selected_tools,
+        'processing_time_ms': processing_time,
+        'verified': is_verified
+    }
+
+def _synthesize_answer_with_tool_selection(self, question: str, 
+                                          results: Dict,
+                                          tools_used: List[str]) -> Tuple[str, ProvenanceChain]:
+    """
+    Synthesize answer based on which tools were used
+    """
+    answer = "I couldn't find a definitive answer to your question."
+    primary_source = None
+    supporting_sources = []
+    
+    # Priority 1: Facts (most reliable)
+    if 'structured_query' in tools_used and results.get('facts'):
+        facts = results['facts']
+        if facts:
+            fact = facts[0]
+            key = fact.get('key', 'value')
+            value = fact.get('value', '')
+            numeric = fact.get('numeric_value')
+            
+            if numeric:
+                if key == 'revenue':
+                    answer = f"Revenue was ${numeric:,.2f}"
+                elif key == 'profit':
+                    answer = f"Profit was ${numeric:,.2f}"
+                elif key == 'fiscal_year':
+                    answer = f"Fiscal year: {int(numeric)}"
+                else:
+                    answer = f"{key}: {value}"
+            else:
+                answer = f"{key}: {value}"
+            
+            primary_source = self.tools.create_citation(
+                {'content': value, 'metadata': fact}, 
+                doc_name="Financial Report"
+            )
+    
+    # Priority 2: Semantic search results
+    elif 'semantic_search' in tools_used and results.get('semantic'):
+        semantic_results = results['semantic']
+        if semantic_results:
+            best = semantic_results[0]
+            answer = best['content'][:200] + "..."
+            
+            primary_source = self.tools.create_citation(
+                best,
+                doc_name=best.get('metadata', {}).get('doc_id', 'Unknown')
+            )
+            
+            for r in semantic_results[1:3]:
+                supporting_sources.append(
+                    self.tools.create_citation(
+                        r,
+                        doc_name=r.get('metadata', {}).get('doc_id', 'Unknown')
+                    )
+                )
+    
+    # Priority 3: Section navigation
+    elif 'pageindex_navigate' in tools_used and results.get('sections'):
+        sections = results['sections']
+        if sections:
+            section = sections[0]
+            answer = f"Relevant section found: {section['title']}. Pages {section['page_start']}-{section['page_end']}."
+            
+            primary_source = SourceCitation(
+                document_name=section.get('doc_id', 'Unknown'),
+                document_id=section.get('doc_id', 'unknown'),
+                page_number=section.get('page_start', 1),
+                extracted_text=section.get('summary', ''),
+                content_hash="section_navigation",
+                strategy_used="pageindex",
+                confidence=section.get('relevance_score', 0.5)
+            )
+    
+    # Create provenance
+    if primary_source:
+        provenance = ProvenanceChain(
+            claim=answer,
+            primary_source=primary_source,
+            supporting_sources=supporting_sources,
+            all_sources=[primary_source] + supporting_sources
+        )
+    else:
+        provenance = ProvenanceChain(
+            claim=answer,
+            primary_source=SourceCitation(
+                document_name="No source",
+                document_id="unknown",
+                page_number=1,
+                extracted_text="No information found",
+                content_hash="none",
+                strategy_used="none",
+                confidence=0.0
+            ),
+            is_verified=False
+        )
+    
+    return answer, provenance
+def audit_claim(self, claim: str, provenance: Optional[ProvenanceChain] = None) -> Dict:
+    """
+    Audit mode: Verify a claim against source documents
+    
+    Args:
+        claim: The claim to verify
+        provenance: Optional provenance if we already have it
+        
+    Returns:
+        Verification result with source or 'not found'
+    """
+    print(f"\n🔍 AUDIT MODE: Verifying claim: '{claim}'")
+    
+    if provenance:
+        # We have provenance, verify it
+        source = provenance.primary_source
+        
+        # Check if we can access the original document
+        # In real implementation, would extract text from PDF at bbox
+        from src.utils.hashing import hash_text
+        expected_hash = hash_text(source.extracted_text)
+        
+        if expected_hash == source.content_hash:
+            result = {
+                'claim': claim,
+                'verified': True,
+                'method': 'hash_verification',
+                'source': {
+                    'document': source.document_name,
+                    'page': source.page_number,
+                    'bbox': source.bbox.dict() if source.bbox else None,
+                    'text': source.extracted_text,
+                    'confidence': source.confidence
+                },
+                'timestamp': datetime.now().isoformat()
+            }
+            print(f"\n✅ CLAIM VERIFIED")
+            print(f"   Source: {source.document_name}, page {source.page_number}")
+            return result
+        else:
+            result = {
+                'claim': claim,
+                'verified': False,
+                'method': 'hash_mismatch',
+                'source': None,
+                'timestamp': datetime.now().isoformat()
+            }
+            print(f"\n❌ CLAIM NOT VERIFIED - Hash mismatch")
+            return result
+    
+    else:
+        # No provenance, search for the claim
+        print("  Searching for evidence...")
+        
+        # Search semantically
+        results = self.tools.semantic_search(claim, n_results=5)
+        
+        if results:
+            # Check each result for match
+            best_match = None
+            best_score = 0
+            
+            for r in results:
+                content = r['content'].lower()
+                claim_lower = claim.lower()
+                
+                # Simple matching score
+                words_in_claim = set(claim_lower.split())
+                words_in_content = set(content.split())
+                common_words = words_in_claim & words_in_content
+                score = len(common_words) / len(words_in_claim) if words_in_claim else 0
+                
+                if score > 0.5 and score > best_score:
+                    best_score = score
+                    best_match = r
+            
+            if best_match:
+                citation = self.tools.create_citation(
+                    best_match,
+                    doc_name=best_match.get('metadata', {}).get('doc_id', 'Unknown')
+                )
+                
+                result = {
+                    'claim': claim,
+                    'verified': True,
+                    'method': 'semantic_match',
+                    'confidence': best_score,
+                    'source': {
+                        'document': citation.document_name,
+                        'page': citation.page_number,
+                        'text': citation.extracted_text[:200],
+                        'content_hash': citation.content_hash
+                    },
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                print(f"\n✅ CLAIM VERIFIED")
+                print(f"   Source: {citation.document_name}, page {citation.page_number}")
+                print(f"   Match confidence: {best_score:.2f}")
+                return result
+        
+        # No match found
+        result = {
+            'claim': claim,
+            'verified': False,
+            'method': 'no_evidence',
+            'source': None,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        print(f"\n❌ CLAIM NOT VERIFIED - No supporting evidence found")
+        return result

@@ -540,3 +540,59 @@ class PageIndexBuilder:
         print("=" * 60)
         page_index.print_tree()
         print("=" * 60)
+
+        def find_relevant_sections(self, query: str, page_index: PageIndex, top_k: int = 3) -> List[Dict]:
+    """
+    Find most relevant sections for a query
+    
+    Args:
+        query: User query or topic
+        page_index: PageIndex object
+        top_k: Number of sections to return
+    
+    Returns:
+        List of relevant sections with relevance scores
+    """
+    print(f"  🔍 Finding relevant sections for: '{query}'")
+    
+    query_lower = query.lower()
+    scored_sections = []
+    
+    # Score each section
+    for section_id, section in page_index.section_by_id.items():
+        score = 0.0
+        
+        # Check title match
+        if query_lower in section.title.lower():
+            score += 0.4
+        
+        # Check summary match
+        if section.summary and query_lower in section.summary.lower():
+            score += 0.3
+        
+        # Check entity match
+        for entity in section.key_entities:
+            if query_lower in entity.lower():
+                score += 0.2
+                break
+        
+        # Check data types match
+        if 'table' in query_lower and DataType.TABLE in section.data_types_present:
+            score += 0.1
+        if 'figure' in query_lower and DataType.FIGURE in section.data_types_present:
+            score += 0.1
+        
+        if score > 0:
+            scored_sections.append({
+                'section_id': section_id,
+                'title': section.title,
+                'page_start': section.page_start,
+                'page_end': section.page_end,
+                'summary': section.summary,
+                'data_types': [dt.value for dt in section.data_types_present],
+                'key_entities': section.key_entities,
+                'relevance_score': score,
+                'path': section.path
+            })
+    
+  
